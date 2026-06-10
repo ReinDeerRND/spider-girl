@@ -16,17 +16,7 @@ interface NetworkNode extends Item {
   x?: number;
   y?: number;
   radius?: number;
-}
-
-interface NetworkLink extends Link {
-  source: string | NetworkNode;
-  target: string | NetworkNode;
-}
-
-interface NetworkNode extends Item {
-  x?: number;
-  y?: number;
-  radius?: number;
+  depth?: number; // Добавляем глубину узла
 }
 
 interface NetworkLink extends Link {
@@ -39,17 +29,38 @@ interface NetworkLink extends Link {
   template: `
     <div class="network-container">
       <div class="controls">
-        <label>Выберите центральный элемент: </label>
-        <select (change)="onSelectCenter($event)">
-          <option [value]="''">-- Выберите узел --</option>
-          <option
-            *ngFor="let item of allItems"
-            [value]="item.id"
-            [selected]="item.id === selectedItemId"
-          >
-            {{ item.title }} ({{ item.type }})
-          </option>
-        </select>
+        <div class="control-group">
+          <label>Выберите центральный элемент: </label>
+          <select (change)="onSelectCenter($event)">
+            <option [value]="''">-- Выберите узел --</option>
+            <option
+              *ngFor="let item of allItems"
+              [value]="item.id"
+              [selected]="item.id === selectedItemId"
+            >
+              {{ item.title }} ({{ item.type }})
+            </option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label>Глубина отображения: </label>
+          <div class="depth-switch">
+            <button 
+              [class.active]="depthLevel === 1" 
+              (click)="setDepthLevel(1)"
+              class="depth-btn">
+              Только 1-й уровень
+            </button>
+            <button 
+              [class.active]="depthLevel === 2" 
+              (click)="setDepthLevel(2)"
+              class="depth-btn">
+              1-й и 2-й уровни
+            </button>
+          </div>
+        </div>
+
         <button (click)="resetView()" class="reset-btn">Сбросить вид</button>
       </div>
       <div #networkContainer class="network-svg-container"></div>
@@ -59,8 +70,7 @@ interface NetworkLink extends Link {
         [style.left.px]="tooltipX"
         [style.top.px]="tooltipY"
       >
-        <strong>{{ hoveredNode.title }}</strong
-        ><br />
+        <strong>{{ hoveredNode.title }}</strong><br />
         Тип: {{ hoveredNode.type }}<br />
         ID: {{ hoveredNode.id }}
       </div>
@@ -89,6 +99,34 @@ interface NetworkLink extends Link {
         display: flex;
         gap: 10px;
         align-items: center;
+        flex-wrap: wrap;
+      }
+      .control-group {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .depth-switch {
+        display: flex;
+        gap: 5px;
+        background: #f0f0f0;
+        border-radius: 5px;
+        padding: 2px;
+      }
+      .depth-btn {
+        padding: 5px 10px;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        background: transparent;
+        transition: all 0.3s;
+      }
+      .depth-btn.active {
+        background: #007bff;
+        color: white;
+      }
+      .depth-btn:hover:not(.active) {
+        background: #e0e0e0;
       }
       select {
         padding: 5px 10px;
@@ -144,6 +182,7 @@ export class NetworkVisualizationComponent
   hoveredNode: NetworkNode | null = null;
   tooltipX = 0;
   tooltipY = 0;
+  depthLevel: number = 1; // 1 или 2
 
   ngOnInit(): void {
     this.allItems = [...this.items];
@@ -174,6 +213,11 @@ export class NetworkVisualizationComponent
 
   onSelectCenter(event: any): void {
     this.selectedItemId = event.target.value;
+    this.updateVisualization();
+  }
+
+  setDepthLevel(level: number): void {
+    this.depthLevel = level;
     this.updateVisualization();
   }
 
@@ -221,6 +265,34 @@ export class NetworkVisualizationComponent
     this.updateVisualization();
   }
 
+  private calculateNodeDepths(startNodeId: string): Map<string, number> {
+    const depths = new Map<string, number>();
+    const queue: { id: string; depth: number }[] = [{ id: startNodeId, depth: 0 }];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const { id, depth } = queue.shift()!;
+      
+      if (visited.has(id)) continue;
+      visited.add(id);
+      depths.set(id, depth);
+
+      // Находим все связи для текущего узла
+      const connectedLinks = this.links.filter(
+        link => link.records.includes(id)
+      );
+
+      for (const link of connectedLinks) {
+        const neighborId = link.records[0] === id ? link.records[1] : link.records[0];
+        if (!visited.has(neighborId) && depth + 1 <= this.depthLevel) {
+          queue.push({ id: neighborId, depth: depth + 1 });
+        }
+      }
+    }
+
+    return depths;
+  }
+
   private updateVisualization(): void {
     if (!this.svgGroup || !this.items.length) return;
 
@@ -233,12 +305,25 @@ export class NetworkVisualizationComponent
     );
     if (!selectedNode) return;
 
-    // Формируем граф
+    // Вычисляем глубину для каждого узла
+    const nodeDepths = this.calculateNodeDepths(selectedNode.id);
+    
+    // Формируем граф с учетом глубины
     const nodes: NetworkNode[] = [...this.items];
+    
+    // Определяем узлы для отображения на основе глубины
+    const displayNodeIds = new Set<string>();
+    nodeDepths.forEach((depth, nodeId) => {
+      if (depth <= this.depthLevel) {
+        displayNodeIds.add(nodeId);
+      }
+    });
+
+    // Фильтруем связи - показываем только связи между отображаемыми узлами
     const linksData: NetworkLink[] = this.links
       .filter((link) => {
-        // Показываем только связи, где участвует выбранный узел
-        return link.records.includes(selectedNode.id);
+        const [sourceId, targetId] = link.records;
+        return displayNodeIds.has(sourceId) && displayNodeIds.has(targetId);
       })
       .map((link) => {
         const [sourceId, targetId] = link.records;
@@ -249,31 +334,64 @@ export class NetworkVisualizationComponent
         };
       });
 
-    // Определяем уникальные узлы для отображения (центральный + связанные)
-    const connectedNodeIds = new Set<string>();
-    connectedNodeIds.add(selectedNode.id);
-    linksData.forEach((link) => {
-      if (typeof link.source === 'string') connectedNodeIds.add(link.source);
-      if (typeof link.target === 'string') connectedNodeIds.add(link.target);
+    const displayNodes = nodes.filter((node) => displayNodeIds.has(node.id));
+    
+    // Добавляем информацию о глубине к узлам
+    displayNodes.forEach(node => {
+      node.depth = nodeDepths.get(node.id) || 0;
     });
 
-    const displayNodes = nodes.filter((node) => connectedNodeIds.has(node.id));
-
-    // Позиционируем узлы по кругу
-    const radius = Math.min(this.width, this.height) * 0.35;
-    const angleStep = (Math.PI * 2) / (displayNodes.length - 1);
-
+    // Позиционируем узлы по кругу с учетом глубины
+    const radiusStep = Math.min(this.width, this.height) * 0.2;
+    const firstLevelNodes = displayNodes.filter(n => n.depth === 1);
+    const secondLevelNodes = displayNodes.filter(n => n.depth === 2);
+    
+    // Позиционируем узлы первого уровня
+    const angleStep1 = (Math.PI * 2) / (firstLevelNodes.length || 1);
     let angle = 0;
+    
     displayNodes.forEach((node) => {
       if (node.id === selectedNode.id) {
         node.x = 0;
         node.y = 0;
-      } else {
+        node.radius = 35;
+      } else if (node.depth === 1) {
+        const radius = radiusStep;
         node.x = Math.cos(angle) * radius;
         node.y = Math.sin(angle) * radius;
-        angle += angleStep;
+        node.radius = 25;
+        angle += angleStep1;
+      } else if (node.depth === 2 && this.depthLevel === 2) {
+        // Находим родительский узел для позиционирования
+        const parentLink = this.links.find(link => 
+          link.records.includes(node.id) && 
+          displayNodeIds.has(link.records[0]) && 
+          displayNodeIds.has(link.records[1])
+        );
+        
+        if (parentLink) {
+          const parentId = parentLink.records[0] === node.id ? parentLink.records[1] : parentLink.records[0];
+          const parentNode = displayNodes.find(n => n.id === parentId);
+          
+          if (parentNode && parentNode.x && parentNode.y) {
+            const angleToParent = Math.atan2(parentNode.y, parentNode.x);
+            const radius = radiusStep * 1.8;
+            node.x = Math.cos(angleToParent + Math.PI / 4) * radius;
+            node.y = Math.sin(angleToParent + Math.PI / 4) * radius;
+          } else {
+            // Fallback позиционирование
+            const radius = radiusStep * 1.8;
+            node.x = Math.cos(angle) * radius;
+            node.y = Math.sin(angle) * radius;
+          }
+        } else {
+          const radius = radiusStep * 1.8;
+          node.x = Math.cos(angle) * radius;
+          node.y = Math.sin(angle) * radius;
+        }
+        node.radius = 20;
+        angle += 0.3;
       }
-      node.radius = node.id === selectedNode.id ? 30 : 20;
     });
 
     // Создаем defs для маркеров и фильтров
@@ -366,13 +484,13 @@ export class NetworkVisualizationComponent
         }
       });
 
-    // Рисуем круги узлов
+    // Рисуем круги узлов с разными размерами в зависимости от глубины
     nodeGroups
       .append('circle')
       .attr('r', (d: NetworkNode) => d.radius || 20)
       .attr('fill', (d: NetworkNode) => this.getNodeColor(d.type))
       .attr('stroke', '#fff')
-      .attr('stroke-width', 3)
+      .attr('stroke-width', (d: NetworkNode) => d.depth === 0 ? 4 : 2)
       .attr('cursor', 'pointer')
       .attr('opacity', 0.9)
       .attr('filter', (d: NetworkNode) =>
@@ -385,7 +503,7 @@ export class NetworkVisualizationComponent
       .attr('dy', '.35em')
       .attr('text-anchor', 'middle')
       .attr('fill', 'white')
-      .attr('font-size', '12px')
+      .attr('font-size', (d: NetworkNode) => d.depth === 0 ? '14px' : '11px')
       .attr('font-weight', 'bold')
       .text((d: NetworkNode) => d.title);
 
