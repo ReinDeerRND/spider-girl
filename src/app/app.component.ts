@@ -1,4 +1,5 @@
 import { Component } from '@angular/core';
+import { items, links } from './models/data';
 
 @Component({
   selector: 'app-root',
@@ -7,4 +8,7 @@ import { Component } from '@angular/core';
 })
 export class AppComponent {
   title = 'spider';
+   items = items;
+  links = links;
+  selectedId = items[0]?.id;
 }
